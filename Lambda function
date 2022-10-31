@@ -1,0 +1,48 @@
+import boto3
+
+client = boto3.client('ec2')
+ec2 = boto3.resource('ec2')
+sns = boto3.client('sns')
+
+def lambda_handler(event, context):
+    
+    aws_account_id = context.invoked_function_arn.split(":")[4]
+    with_tag = []
+    without_tag = []
+
+    ec2_regions = [region['RegionName'] for region in client.describe_regions()['Regions']]
+
+    for region in ec2_regions:
+        conn = boto3.resource('ec2',region_name=region)
+        instances = conn.instances.filter()
+        for instance in instances:
+
+            if instance.state['Name'] != 'running':
+                continue
+
+            has_tag = False
+            for tag in instance.tags:
+                if tag['Key'] == 'dontstop' and tag['Value'] == 'true':
+                    has_tag = True
+                    break
+
+            if has_tag:
+                with_tag.append(instance.id)
+            else:
+                without_tag.append(instance.id)
+                instance.stop()
+
+    print("These instances will remain running: %s" % with_tag)
+    print("These instances will be stopped: %s" % without_tag)
+    stopped_instances = ', '.join([str(elem) for elem in without_tag])
+    print(stopped_instances)
+    running_instances =  ', '.join([str(elem) for elem in with_tag])
+    print(running_instances)
+    
+    if not with_tag and not without_tag:
+        return
+    else:
+        message = 'This is a notification about your AWS account ' + aws_account_id + '\n' + 'These instances will be stopped: ' + stopped_instances  + '\n' + 'These instances will remain running: ' + running_instances
+        subject = 'Stopping non tagged running EC2'
+        topic_arn = ''
+        sns.publish(TopicArn=topic_arn,Subject=subject,Message=message)
